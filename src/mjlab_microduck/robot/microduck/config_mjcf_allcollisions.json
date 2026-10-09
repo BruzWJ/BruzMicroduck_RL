@@ -13,6 +13,7 @@
     ],
     "post_import_commands": [
         "sed -i 's/body name=\"trunk_base\" pos=\"[^\"]*\"/body name=\"trunk_base\" pos=\"0 0 0.12\"/' robot_allcollisions.xml",
+        "python3 apply_mass_overrides.py robot_allcollisions.xml",
         "sed -i '/<!-- Part sole_left -->/{n; n; s/class=\"collision\"/name=\"left_foot_collision\" class=\"collision\"/}' robot_allcollisions.xml",
         "sed -i '/<!-- Part sole_right -->/{n; n; s/class=\"collision\"/name=\"right_foot_collision\" class=\"collision\"/}' robot_allcollisions.xml",
         "sed -i '/<!-- Part power_support -->/{n; n; s/class=\"collision\"/class=\"self_collision_only\"/}' robot_allcollisions.xml",

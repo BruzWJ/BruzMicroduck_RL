@@ -71,6 +71,10 @@ def _write_source_map(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
                 },
             },
         }
+        if filename == "walk.onnx":
+            source_map[filename]["training"]["evaluation"]["aggregate"] = {
+                "robot_xy_speed_m_s_mean": 0.05
+            }
     path = tmp_path / "sources.json"
     path.write_text(json.dumps(source_map, indent=2) + "\n")
     return path, source_files
@@ -175,6 +179,23 @@ def test_assembly_never_overwrites_an_existing_destination(tmp_path: Path) -> No
         bundle.assemble_bundle(source_map, output)
 
     assert marker.read_text() == "mine"
+
+
+@pytest.mark.parametrize("speed", [None, 0.011607])
+def test_assembly_refuses_stationary_walk_evidence(
+    tmp_path: Path, speed: float | None
+) -> None:
+    source_map_path, _ = _write_source_map(tmp_path)
+    source_map = json.loads(source_map_path.read_text())
+    aggregate = source_map["walk.onnx"]["training"]["evaluation"]["aggregate"]
+    if speed is None:
+        aggregate.pop("robot_xy_speed_m_s_mean")
+    else:
+        aggregate["robot_xy_speed_m_s_mean"] = speed
+    source_map_path.write_text(json.dumps(source_map))
+
+    with pytest.raises(policy_manifest.ManifestError, match="mean must be >= 0.03"):
+        bundle.assemble_bundle(source_map_path, tmp_path / "rejected")
 
 
 class _FakeApi:
@@ -307,3 +328,18 @@ def test_publish_never_tags_or_exposes_a_corrupt_upload(tmp_path: Path) -> None:
 def test_publish_requires_a_numeric_immutable_tag(tmp_path: Path) -> None:
     with pytest.raises(policy_manifest.ManifestError, match="numeric"):
         bundle.publish_bundle(tmp_path, "latest")
+
+
+def test_publish_refuses_stationary_walk_manifest_before_network(
+    tmp_path: Path,
+) -> None:
+    output, manifest, _ = _assemble(tmp_path)
+    manifest["policies"][0]["training"]["evaluation"]["aggregate"][
+        "robot_xy_speed_m_s_mean"
+    ] = 0.011607
+    (output / "manifest.json").write_text(json.dumps(manifest))
+    api = _FakeApi({*bundle.POLICY_FILES, "manifest.json", "README.md", "LICENSE"})
+
+    with pytest.raises(policy_manifest.ManifestError, match="mean must be >= 0.03"):
+        bundle.publish_bundle(output, "v1", api=api)
+    assert api.events == []

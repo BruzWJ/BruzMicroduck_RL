@@ -298,7 +298,9 @@ the ten canonical filenames. Every entry has `onnx` and `training` objects;
 `training.task_id` must match the filename's registered task and
 `training.onnx_sha256` must match the source file. Other training provenance is
 copied into the manifest, while local checkpoint and evaluation-report paths
-are removed. The assembler validates and smoke-runs every ONNX, writes the
+are removed. Walking evidence must report an aggregate mean simulated XY speed
+of at least `0.03 m/s`; this rejects policies that only settle into a stance.
+The assembler validates and smoke-runs every ONNX, writes the
 scripted/phase/roller runtime contracts for XC330-T181, and refuses a partial
 set or an existing destination.
 

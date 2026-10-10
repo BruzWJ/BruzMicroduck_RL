@@ -6,6 +6,7 @@ import argparse
 import copy
 import hashlib
 import json
+import math
 import re
 import shutil
 import tempfile
@@ -20,6 +21,7 @@ from mjlab_microduck.publish import manifest as policy_manifest
 TARGET_REPO = "BWJ2310/bruzmicroduck-xc330-custom-weight-policies"
 REPOSITORY_LICENSE = Path(__file__).resolve().parents[3] / "LICENSE"
 TAG_RE = re.compile(r"v[1-9][0-9]*")
+WALK_MIN_MEAN_XY_SPEED_M_S = 0.03
 
 POLICY_TASKS: dict[str, str] = {
     "walk.onnx": "Mjlab-Velocity-Flat-MicroDuck",
@@ -134,6 +136,26 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _require_walk_locomotion_evidence(training: Mapping[str, Any]) -> None:
+    evaluation = training.get("evaluation")
+    aggregate = evaluation.get("aggregate") if isinstance(evaluation, dict) else None
+    speed = (
+        aggregate.get("robot_xy_speed_m_s_mean")
+        if isinstance(aggregate, dict)
+        else None
+    )
+    if (
+        isinstance(speed, bool)
+        or not isinstance(speed, (int, float))
+        or not math.isfinite(speed)
+        or speed < WALK_MIN_MEAN_XY_SPEED_M_S
+    ):
+        raise policy_manifest.ManifestError(
+            "walk.onnx: evaluation aggregate robot_xy_speed_m_s_mean must be "
+            f">= {WALK_MIN_MEAN_XY_SPEED_M_S}"
+        )
+
+
 def _load_sources(path: Path) -> dict[str, tuple[Path, dict[str, Any]]]:
     def reject_constant(value: str) -> Any:
         raise ValueError(f"non-finite JSON value {value}")
@@ -168,6 +190,8 @@ def _load_sources(path: Path) -> dict[str, tuple[Path, dict[str, Any]]]:
             raise policy_manifest.ManifestError(
                 f"{filename}: task_id must be {task_id!r}"
             )
+        if filename == "walk.onnx":
+            _require_walk_locomotion_evidence(training)
         actual_hash = _sha256(source)
         if training.get("onnx_sha256") != actual_hash:
             raise policy_manifest.ManifestError(
@@ -269,6 +293,7 @@ def _bundle_hashes(directory: Path) -> dict[str, str]:
         raise policy_manifest.ManifestError(
             f"bundle inventory is {sorted(actual)!r}, expected {sorted(expected)!r}"
         )
+
     def reject_constant(value: str) -> Any:
         raise ValueError(f"non-finite JSON value {value}")
 
@@ -278,6 +303,7 @@ def _bundle_hashes(directory: Path) -> dict[str, str]:
     policy_manifest.validate_manifest(manifest)
     if tuple(entry.get("file") for entry in manifest["policies"]) != POLICY_FILES:
         raise policy_manifest.ManifestError("manifest is not the exact ten-policy set")
+    _require_walk_locomotion_evidence(manifest["policies"][0].get("training", {}))
     for filename in POLICY_FILES:
         policy_manifest.check_onnx(directory / filename)
         policy_manifest.smoke_run_onnx(directory / filename)

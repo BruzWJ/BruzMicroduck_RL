@@ -1,7 +1,7 @@
-"""Checkpoint uploader run inside an HF Job.
+"""Checkpoint dataset uploader run inside an HF Job.
 
 Watches `logs/rsl_rl/**/model_*.pt` and uploads new/updated files to the
-target HF Model repo. Designed to be `nohup uv run`-launched from the job
+target Hub dataset. Designed to be `nohup uv run`-launched from the job
 bootstrap, with auth coming from the HF_TOKEN secret injected by `hf jobs run`.
 """
 
@@ -12,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 
-from huggingface_hub import HfApi, CommitOperationAdd
+from huggingface_hub import CommitOperationAdd, HfApi
 
 
 def main() -> int:
@@ -21,25 +21,41 @@ def main() -> int:
         print("[uploader] CKPT_REPO not set, exiting", flush=True)
         return 1
 
+    path_prefix = os.environ.get("CKPT_PATH_PREFIX")
+    if not path_prefix:
+        print("[uploader] CKPT_PATH_PREFIX not set, exiting", flush=True)
+        return 1
+
     poll_interval = float(os.environ.get("CKPT_POLL_INTERVAL", "60"))
     root = Path(os.environ.get("CKPT_ROOT", "logs/rsl_rl"))
 
     one_shot = os.environ.get("CKPT_ONE_SHOT") == "1"
 
     api = HfApi()
-    api.create_repo(repo_id, repo_type="model", private=True, exist_ok=True)
     mode = "one-shot" if one_shot else f"every {poll_interval}s"
-    print(f"[uploader] watching {root} -> {repo_id} ({mode})", flush=True)
+    destination = f"{repo_id}/{path_prefix}"
+    print(
+        f"[uploader] watching {root} -> dataset:{destination} ({mode})",
+        flush=True,
+    )
 
     sent: dict[Path, float] = {}
     while True:
         try:
-            files = list(root.glob("**/model_*.pt"))
+            checkpoints = list(root.glob("**/model_*.pt"))
+            if one_shot and not checkpoints:
+                print(
+                    f"[uploader] no trained checkpoints found below {root}",
+                    flush=True,
+                )
+                return 1
+
+            files = checkpoints
             # also pick up the dumped configs once
             files += [p for p in root.glob("**/params/*.yaml")]
             files += [p for p in root.glob("**/params/*.json")]
 
-            to_upload: list[CommitOperationAdd] = []
+            pending: list[tuple[Path, float, CommitOperationAdd]] = []
             for f in files:
                 try:
                     mtime = f.stat().st_mtime
@@ -49,22 +65,33 @@ def main() -> int:
                     continue
                 # use path-in-repo relative to logs/rsl_rl so the repo mirrors run dirs
                 rel = f.relative_to(root)
-                to_upload.append(
-                    CommitOperationAdd(path_in_repo=str(rel), path_or_fileobj=str(f))
+                rel = Path(path_prefix) / rel
+                pending.append(
+                    (
+                        f,
+                        mtime,
+                        CommitOperationAdd(
+                            path_in_repo=str(rel), path_or_fileobj=str(f)
+                        ),
+                    )
                 )
-                sent[f] = mtime
 
-            if to_upload:
-                msg = f"upload {len(to_upload)} file(s)"
+            if pending:
+                operations = [operation for _, _, operation in pending]
+                msg = f"upload {len(operations)} file(s)"
                 api.create_commit(
                     repo_id=repo_id,
-                    repo_type="model",
-                    operations=to_upload,
+                    repo_type="dataset",
+                    operations=operations,
                     commit_message=msg,
                 )
-                print(f"[uploader] pushed {len(to_upload)} file(s)", flush=True)
+                for path, mtime, _ in pending:
+                    sent[path] = mtime
+                print(f"[uploader] pushed {len(operations)} file(s)", flush=True)
         except Exception as e:
             print(f"[uploader] error: {e}", flush=True)
+            if one_shot:
+                return 1
 
         if one_shot:
             return 0

@@ -17,8 +17,7 @@ executing `from mjlab.scripts.train import main`, i.e. before its two-stage
 tyro parse ever sees argv. That path is mjlab's own, so no install order can
 take it away from us.
 
-`uv run scripts/hf/train_hf.py <task> ...` calls `submit()` directly and stays
-the escape hatch if this interception ever stops firing.
+The integrated `uv run train ... --hf-jobs` flag is the only submission path.
 """
 
 from __future__ import annotations

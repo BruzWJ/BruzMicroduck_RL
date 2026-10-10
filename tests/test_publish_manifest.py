@@ -63,15 +63,40 @@ OFFICIAL_SET = {
 }
 
 
-def _tiny_policy(path: Path, obs_len: int = m.OBS_LEN, action_len: int = m.ACTION_LEN) -> Path:
+def _tiny_policy(
+    path: Path,
+    obs_len: int = m.OBS_LEN,
+    action_len: int = m.ACTION_LEN,
+    *,
+    input_name: str = "obs",
+    output_name: str = "actions",
+    input_shape: list[int | str | None] | None = None,
+    output_shape: list[int | str | None] | None = None,
+    tensor_type: int = TensorProto.FLOAT,
+) -> Path:
     """A one-layer 'policy' with the daemon's shape, so the ONNX checks run without torch."""
     rng = np.random.default_rng(0)
-    w = numpy_helper.from_array(rng.normal(0, 0.1, (obs_len, action_len)).astype(np.float32), "W")
-    node = helper.make_node("MatMul", ["obs", "W"], ["actions"])
+    dtype = np.float64 if tensor_type == TensorProto.DOUBLE else np.float32
+    w = numpy_helper.from_array(
+        rng.normal(0, 0.1, (obs_len, action_len)).astype(dtype), "W"
+    )
+    node = helper.make_node("MatMul", [input_name, "W"], [output_name])
     graph = helper.make_graph(
         [node], "policy",
-        [helper.make_tensor_value_info("obs", TensorProto.FLOAT, [1, obs_len])],
-        [helper.make_tensor_value_info("actions", TensorProto.FLOAT, [1, action_len])],
+        [
+            helper.make_tensor_value_info(
+                input_name,
+                tensor_type,
+                input_shape if input_shape is not None else [1, obs_len],
+            )
+        ],
+        [
+            helper.make_tensor_value_info(
+                output_name,
+                tensor_type,
+                output_shape if output_shape is not None else [1, action_len],
+            )
+        ],
         initializer=[w],
     )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
@@ -145,6 +170,7 @@ def test_an_episodic_manifest_is_a_loadable_skill():
     assert built["schema_version"] == 2
     assert (built["obs_len"], built["action_len"], built["model_api"]) == (61, 14, 1)
     assert built["robot"] == m.ROBOT
+    assert built["robot"]["servos"] == "xc330-t181"
     assert built["command"]["encoding"] == "constant"
     assert built["command"]["idle"] == [0.0, 0.0, 0.0]
     assert built["duration_s"] == 4.0 and built["chain"] is False
@@ -257,6 +283,59 @@ def test_a_legacy_51d_graph_is_refused_before_upload(tmp_path):
 def test_a_wrong_action_width_is_refused(tmp_path):
     path = _tiny_policy(tmp_path / "wide.onnx", action_len=16)
     with pytest.raises(m.ManifestError, match="16 actions"):
+        m.check_onnx(path)
+
+
+def test_the_feed_forward_input_must_be_named_obs(tmp_path):
+    path = _tiny_policy(tmp_path / "wrong-name.onnx", input_name="observations")
+
+    with pytest.raises(m.ManifestError, match="requires 'obs'"):
+        m.check_onnx(path)
+
+
+@pytest.mark.parametrize(
+    ("input_shape", "output_shape", "message"),
+    [
+        ([m.OBS_LEN], [m.ACTION_LEN], "input.*rank 2"),
+        ([1, m.OBS_LEN], [m.ACTION_LEN], "output.*rank 2"),
+        ([2, m.OBS_LEN], [2, m.ACTION_LEN], "fixed batch 2"),
+        ([1, m.OBS_LEN], [2, m.ACTION_LEN], "fixed batch 2"),
+    ],
+)
+def test_the_feed_forward_graph_requires_runtime_compatible_matrices(
+    tmp_path, input_shape, output_shape, message
+):
+    path = _tiny_policy(
+        tmp_path / "wrong-matrix.onnx",
+        input_shape=input_shape,
+        output_shape=output_shape,
+    )
+
+    with pytest.raises(m.ManifestError, match=message):
+        m.check_onnx(path)
+
+
+@pytest.mark.parametrize("dynamic_batch", ["batch", None])
+def test_dynamic_batch_and_any_sole_output_name_match_the_runtime(
+    tmp_path, dynamic_batch
+):
+    path = _tiny_policy(
+        tmp_path / "dynamic.onnx",
+        output_name="policy_output",
+        input_shape=[dynamic_batch, m.OBS_LEN],
+        output_shape=[dynamic_batch, m.ACTION_LEN],
+    )
+
+    shape = m.check_onnx(path)
+
+    assert shape.input_name == "obs"
+    assert shape.output_name == "policy_output"
+
+
+def test_the_feed_forward_graph_must_use_float32_tensors(tmp_path):
+    path = _tiny_policy(tmp_path / "float64.onnx", tensor_type=TensorProto.DOUBLE)
+
+    with pytest.raises(m.ManifestError, match="must be float32"):
         m.check_onnx(path)
 
 

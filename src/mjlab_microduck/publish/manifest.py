@@ -25,7 +25,12 @@ SCHEMA_VERSION = 2
 MODEL_API = 1
 OBS_LEN = 61
 ACTION_LEN = 14
-ROBOT: dict[str, Any] = {"model": "microduck", "hw_rev": 1, "servos": "xl330", "control_hz": 50}
+ROBOT: dict[str, Any] = {
+    "model": "microduck",
+    "hw_rev": 1,
+    "servos": "xc330-t181",
+    "control_hz": 50,
+}
 
 # The one `.onnx` a repo carries. The daemon takes the sole `.onnx` in a repo and refuses several.
 POLICY_FILE = "policy.onnx"
@@ -235,7 +240,13 @@ class OnnxShape:
 
 
 def inspect_onnx(path: Path) -> OnnxShape:
-    """The graph's single input and output widths, as the daemon checks them at load."""
+    """The feed-forward tensor contract the daemon checks at load.
+
+    ``duck-control`` addresses the input by its literal ``obs`` name, accepts any
+    sole output name, and supplies batch one to a rank-two float32 graph.  A
+    symbolic/unknown batch dimension is compatible with that call; a fixed batch
+    other than one is not.
+    """
     import onnx
 
     model = onnx.load(str(path), load_external_data=False)
@@ -247,21 +258,41 @@ def inspect_onnx(path: Path) -> OnnxShape:
             f"{path.name}: expected one input and one output, found "
             f"{[i.name for i in inputs]} -> {[o.name for o in graph.output]}"
         )
+    if inputs[0].name != "obs":
+        raise ManifestError(
+            f"{path.name}: input tensor is named {inputs[0].name!r}; "
+            "the robot requires 'obs'"
+        )
 
-    def last_dim(value) -> int:
+    def matrix_width(value, role: str) -> int:
+        if value.type.tensor_type.elem_type != onnx.TensorProto.FLOAT:
+            raise ManifestError(
+                f"{path.name}: {role} tensor {value.name!r} must be float32"
+            )
         dims = value.type.tensor_type.shape.dim
-        if not dims:
-            raise ManifestError(f"{path.name}: {value.name} has no shape")
-        last = dims[-1]
-        if not last.HasField("dim_value"):
-            raise ManifestError(f"{path.name}: {value.name}'s last dimension is symbolic")
-        return int(last.dim_value)
+        if len(dims) != 2:
+            raise ManifestError(
+                f"{path.name}: {role} tensor {value.name!r} must be rank 2, "
+                f"not rank {len(dims)}"
+            )
+        batch = dims[0]
+        if batch.HasField("dim_value") and batch.dim_value != 1:
+            raise ManifestError(
+                f"{path.name}: {role} tensor {value.name!r} has fixed batch "
+                f"{batch.dim_value}; the robot requires batch 1 or dynamic"
+            )
+        feature = dims[1]
+        if not feature.HasField("dim_value"):
+            raise ManifestError(
+                f"{path.name}: {role} tensor {value.name!r} needs a fixed feature width"
+            )
+        return int(feature.dim_value)
 
     return OnnxShape(
         input_name=inputs[0].name,
         output_name=graph.output[0].name,
-        obs_len=last_dim(inputs[0]),
-        action_len=last_dim(graph.output[0]),
+        obs_len=matrix_width(inputs[0], "input"),
+        action_len=matrix_width(graph.output[0], "output"),
     )
 
 
@@ -407,4 +438,4 @@ def _check_repo_id(repo_id: str, what: str) -> None:
 
 
 def dump_manifest(manifest: dict[str, Any]) -> str:
-    return json.dumps(manifest, indent=2) + "\n"
+    return json.dumps(manifest, indent=2, allow_nan=False) + "\n"

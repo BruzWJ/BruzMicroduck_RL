@@ -1,7 +1,10 @@
+from mjlab_microduck.publish import bundle
+from mjlab_microduck.tasks.mdp import GroundPickPhaseCommand
 from mjlab_microduck.tasks.microduck_ground_pick_env_cfg import (
+    GP_PERIOD,
+    RISE_END,
     make_microduck_ground_pick_env_cfg,
 )
-from mjlab_microduck.tasks.mdp import GroundPickPhaseCommand
 
 
 def test_ground_pick_cfg_task_space_rewards():
@@ -45,6 +48,15 @@ def test_ground_pick_cfg_command_is_phase():
     cfg = make_microduck_ground_pick_env_cfg()
     cmd = cfg.commands["twist"]
     assert cmd.class_type is GroundPickPhaseCommand
+    assert cmd.period == GP_PERIOD
+
+
+def test_ground_pick_bundle_finishes_the_trained_cycle():
+    assert bundle.GROUND_PICK_PERIOD_S == GP_PERIOD
+    assert RISE_END < bundle.GROUND_PICK_END_PHASE <= 1.0
+    assert bundle.GROUND_PICK_DURATION_S == (
+        bundle.GROUND_PICK_PERIOD_S * bundle.GROUND_PICK_END_PHASE
+    )
 
 
 def test_ground_pick_rough_variant_builds():

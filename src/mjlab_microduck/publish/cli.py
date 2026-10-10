@@ -22,7 +22,7 @@ from __future__ import annotations
 import shutil
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, NoReturn
 
@@ -120,6 +120,7 @@ def _resolve_weights(cfg: PublishConfig, workdir: Path) -> tuple[Path, dict]:
 
     # Heavy imports only on this path: the ONNX path must work without a GPU or mjlab's registry.
     import mjlab.tasks  # noqa: F401  (populates the registry)
+
     from mjlab_microduck.export import ExportConfig, run_export
 
     out = workdir / m.POLICY_FILE
@@ -139,6 +140,10 @@ def _resolve_weights(cfg: PublishConfig, workdir: Path) -> tuple[Path, dict]:
         training["run"] = result.wandb_run_path
     if result.checkpoint_iteration is not None:
         training["checkpoint"] = result.checkpoint_iteration
+    training["export_parity"] = {
+        "method": "loaded-pytorch-policy-vs-onnxruntime-cpu",
+        **asdict(result.parity),
+    }
     return result.onnx_path, training
 
 

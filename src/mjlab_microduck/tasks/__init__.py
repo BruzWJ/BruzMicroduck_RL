@@ -41,6 +41,7 @@ from .microduck_ground_pick_env_cfg import (
 )
 from .microduck_ball_kick_env_cfg import (
     make_microduck_ball_kick_env_cfg,
+    MicroduckBallKickLeftRlCfg,
     MicroduckBallKickRlCfg,
 )
 from .microduck_sitstand_env_cfg import (
@@ -165,6 +166,14 @@ register_mjlab_task(
 )
 
 register_mjlab_task(
+    task_id="Mjlab-BallKickLeft-Flat-MicroDuck",
+    env_cfg=make_microduck_ball_kick_env_cfg(kick_foot="left"),
+    play_env_cfg=make_microduck_ball_kick_env_cfg(play=True, kick_foot="left"),
+    rl_cfg=MicroduckBallKickLeftRlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
+
+register_mjlab_task(
     task_id="Mjlab-GroundPick-Rough-MicroDuck",
     env_cfg=make_microduck_ground_pick_env_cfg(rough=True),
     play_env_cfg=make_microduck_ground_pick_env_cfg(play=True, rough=True),
@@ -265,6 +274,7 @@ _BACKLASH_TASKS = (
     ("Mjlab-GroundPick-Flat-Backlash-MicroDuck", make_microduck_ground_pick_env_cfg, {}, MicroduckGroundPickRlCfg, _BL_GROUNDCONTACT),
     ("Mjlab-GroundPick-Rough-Backlash-MicroDuck", make_microduck_ground_pick_env_cfg, {"rough": True}, MicroduckGroundPickRlCfg, _BL_GROUNDCONTACT),
     ("Mjlab-BallKick-Flat-Backlash-MicroDuck", make_microduck_ball_kick_env_cfg, {}, MicroduckBallKickRlCfg, _BL_GROUNDCONTACT),
+    ("Mjlab-BallKickLeft-Flat-Backlash-MicroDuck", make_microduck_ball_kick_env_cfg, {"kick_foot": "left"}, MicroduckBallKickLeftRlCfg, _BL_GROUNDCONTACT),
     ("Mjlab-Velocity-Flat-Backlash-MicroDuck-Rollers", make_microduck_velocity_rollers_env_cfg, {}, MicroduckRollersRlCfg, _BL_ROLLERS),
     ("Mjlab-Velocity-Swizzle-Backlash-MicroDuck", make_microduck_velocity_swizzle_env_cfg, {}, MicroduckSwizzleRlCfg, _BL_ROLLERS),
     ("Mjlab-RollerCrouch-Flat-Backlash-MicroDuck", make_microduck_roller_crouch_env_cfg, {}, MicroduckRollerCrouchRlCfg, _BL_ROLLERS),

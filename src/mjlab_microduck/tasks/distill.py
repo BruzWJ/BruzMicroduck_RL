@@ -46,6 +46,7 @@ Obs-contract dependencies (61D actor obs, see AGENTS.md): projected gravity at
 from __future__ import annotations
 
 import copy
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -64,21 +65,26 @@ def default_bc_cfg() -> dict:
         "wandb_run_path": "pollen-robotics/mjlab_microduck/69u48n8l",
         "checkpoint_name": "model_9750.pt",
         "checkpoint_path": None,
-        "coef": 1.0,               # MSE weight (actions in rad)
-        "learning_rate": 3e-4,     # dedicated Adam (PPO's adaptive-KL LR must not throttle the BC)
-        "gate_tilt_deg": 35.0,     # stand expert teaches frames with tilt > this
-        "epochs": 5,               # × mini_batches = up to 20 BC steps/iter
+        "coef": 1.0,  # MSE weight (actions in rad)
+        "learning_rate": 3e-4,  # dedicated Adam (PPO's adaptive-KL LR must not throttle the BC)
+        "gate_tilt_deg": 35.0,  # stand expert teaches frames with tilt > this
+        "epochs": 5,  # × mini_batches = up to 20 BC steps/iter
         "mini_batches": 4,
-        "min_mini_batch": 512,     # never take a full 20-step pass on a handful of frames
-        "min_samples": 64,         # skip the fallen term when fewer fallen frames were collected
-        "gravity_slice": (3, 6),   # projected gravity in the actor obs
-        "twist_slice": (48, 51),   # twist command slot → zeroed for the stand expert
+        "min_mini_batch": 512,  # never take a full 20-step pass on a handful of frames
+        "min_samples": 64,  # skip the fallen term when fewer fallen frames were collected
+        "max_updates": None,  # optional finite anchor/distillation warm-up
+        "gravity_slice": (3, 6),  # projected gravity in the actor obs
+        "twist_slice": (48, 51),  # twist command slot → zeroed for the stand expert
         # Walk anchor (run-3 lesson): the warm-start walk teaches frames with tilt < anchor_tilt_deg.
         "anchor_wandb_run_path": "pollen-robotics/mjlab_microduck/441tzs6d",
         "anchor_checkpoint_name": "model_3750.pt",
         "anchor_checkpoint_path": None,
         "anchor_coef": 1.0,
         "anchor_tilt_deg": 25.0,
+        # Opt-in for clean checkpoint adaptation: preserve the source actor on
+        # every collected frame while a newly initialized critic learns.  The
+        # normal velstand path leaves this false and anchors upright frames only.
+        "anchor_all": False,
         # Body-control routing (2026-10, branch improve_velstand2). When body_slice is set,
         # STANDING frames (twist obs exactly 0) with a non-zero body command on
         # body_active_axes are taken off the walk anchor (the walk expert ignores body
@@ -99,6 +105,22 @@ def default_bc_cfg() -> dict:
     }
 
 
+def strip_training_only_config(train_cfg: dict) -> list[str]:
+    """Disable teacher-only components before evaluation or export.
+
+    Constructing a runner normally resolves behavior-cloning checkpoints even
+    when only its actor is needed.  Inference restores the actor from the target
+    checkpoint, so teachers and their optimizers are both irrelevant and must
+    not introduce a network dependency.
+    """
+    disabled: list[str] = []
+    algorithm = train_cfg.get("algorithm")
+    if isinstance(algorithm, dict) and algorithm.get("bc_cfg") is not None:
+        algorithm["bc_cfg"] = None
+        disabled.append("algorithm.bc_cfg")
+    return disabled
+
+
 @dataclass
 class PpoWithExpertBcCfg(PpoWithSymmetryCfg):
     """PpoWithSymmetryCfg + fallen-gated expert behavior cloning."""
@@ -107,32 +129,46 @@ class PpoWithExpertBcCfg(PpoWithSymmetryCfg):
     class_name: str = "mjlab_microduck.tasks.distill.PpoWithExpertBc"
 
 
-def fallen_mask_from_obs(obs: torch.Tensor, gravity_slice: tuple[int, int], gate_tilt_deg: float) -> torch.Tensor:
+def fallen_mask_from_obs(
+    obs: torch.Tensor, gravity_slice: tuple[int, int], gate_tilt_deg: float
+) -> torch.Tensor:
     """tilt > gate from the projected-gravity block: upright → g = (0, 0, -1), cos(tilt) = -g_z."""
-    g = obs[:, gravity_slice[0]:gravity_slice[1]]
-    g = g / g.norm(dim=1, keepdim=True).clamp_min(1e-6)  # obs noise / IMU DR: renormalize
+    g = obs[:, gravity_slice[0] : gravity_slice[1]]
+    g = g / g.norm(dim=1, keepdim=True).clamp_min(
+        1e-6
+    )  # obs noise / IMU DR: renormalize
     cos_tilt = -g[:, 2]
-    return cos_tilt < torch.cos(torch.deg2rad(torch.tensor(gate_tilt_deg, device=obs.device)))
+    return cos_tilt < torch.cos(
+        torch.deg2rad(torch.tensor(gate_tilt_deg, device=obs.device))
+    )
 
 
-def turn_in_place_mask(obs: torch.Tensor, twist_slice: tuple[int, int], eps: float = 1e-6) -> torch.Tensor:
+def turn_in_place_mask(
+    obs: torch.Tensor, twist_slice: tuple[int, int], eps: float = 1e-6
+) -> torch.Tensor:
     """Linear command exactly 0 and a non-zero yaw command (command obs carry no noise)."""
-    tw = obs[:, twist_slice[0]:twist_slice[1]]
+    tw = obs[:, twist_slice[0] : twist_slice[1]]
     return (tw[:, :2].abs().amax(dim=1) <= eps) & (tw[:, 2].abs() > eps)
 
 
 def body_frame_masks(
-    obs: torch.Tensor, twist_slice: tuple[int, int], body_slice: tuple[int, int],
-    active_axes: tuple[int, ...], no_teacher_axes: tuple[int, ...], eps: float = 1e-6,
+    obs: torch.Tensor,
+    twist_slice: tuple[int, int],
+    body_slice: tuple[int, int],
+    active_axes: tuple[int, ...],
+    no_teacher_axes: tuple[int, ...],
+    eps: float = 1e-6,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """(body frames → off the walk anchor, teach frames → stand expert). Command obs carry
     no noise, so "twist == 0" and "axis == 0" are exact tests."""
-    standing = obs[:, twist_slice[0]:twist_slice[1]].abs().amax(dim=1) <= eps
-    body = obs[:, body_slice[0]:body_slice[1]]
+    standing = obs[:, twist_slice[0] : twist_slice[1]].abs().amax(dim=1) <= eps
+    body = obs[:, body_slice[0] : body_slice[1]]
     active = body[:, list(active_axes)].abs().amax(dim=1) > eps
     frames = standing & active
     if no_teacher_axes:
-        frames_teach = frames & (body[:, list(no_teacher_axes)].abs().amax(dim=1) <= eps)
+        frames_teach = frames & (
+            body[:, list(no_teacher_axes)].abs().amax(dim=1) <= eps
+        )
     else:
         frames_teach = frames
     return frames, frames_teach
@@ -140,8 +176,52 @@ def body_frame_masks(
 
 def expert_input(obs: torch.Tensor, twist_slice: tuple[int, int]) -> torch.Tensor:
     out = obs.clone()
-    out[:, twist_slice[0]:twist_slice[1]] = 0.0
+    out[:, twist_slice[0] : twist_slice[1]] = 0.0
     return out
+
+
+def teacher_masks_from_obs(
+    obs: torch.Tensor,
+    cfg: dict,
+    *,
+    has_expert: bool,
+    has_anchor: bool,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return expert, anchor, body-teacher, and unanchored-turn masks."""
+    gsl = tuple(cfg["gravity_slice"])
+    fallen = (
+        fallen_mask_from_obs(obs, gsl, cfg["gate_tilt_deg"])
+        if has_expert
+        else torch.zeros(obs.shape[0], dtype=torch.bool, device=obs.device)
+    )
+    if not has_anchor:
+        upright = torch.zeros_like(fallen)
+    elif cfg.get("anchor_all"):
+        upright = torch.ones_like(fallen)
+    else:
+        upright = ~fallen_mask_from_obs(obs, gsl, cfg["anchor_tilt_deg"])
+    # Keep expert frames out of anchor_all even when a sparse expert batch is
+    # skipped by min_samples later in _bc_update.
+    upright = upright & ~fallen
+
+    body_teach = torch.zeros_like(fallen)
+    if cfg.get("body_slice") is not None and has_anchor:
+        body_frames, candidate_body_teach = body_frame_masks(
+            obs,
+            tuple(cfg["twist_slice"]),
+            tuple(cfg["body_slice"]),
+            tuple(cfg["body_active_axes"]),
+            tuple(cfg["body_no_teacher_axes"]),
+        )
+        upright = upright & ~body_frames
+        if has_expert:
+            body_teach = candidate_body_teach & ~fallen
+
+    turn_free = torch.zeros_like(fallen)
+    if cfg.get("unanchor_turn_in_place") and has_anchor:
+        turn_free = turn_in_place_mask(obs, tuple(cfg["twist_slice"]))
+        upright = upright & ~turn_free
+    return fallen, upright, body_teach, turn_free
 
 
 def load_expert_from(actor: torch.nn.Module, state_dict: dict) -> torch.nn.Module:
@@ -155,6 +235,18 @@ def load_expert_from(actor: torch.nn.Module, state_dict: dict) -> torch.nn.Modul
 
 def _resolve_checkpoint(bc_cfg: dict, prefix: str = "") -> Path | None:
     """Local ``<prefix>checkpoint_path`` if given, else download ``<prefix>wandb_run_path``."""
+    env_name = {
+        "": "MICRODUCK_BC_EXPERT_CHECKPOINT",
+        "anchor_": "MICRODUCK_BC_ANCHOR_CHECKPOINT",
+    }.get(prefix)
+    if env_name is None:
+        raise ValueError(f"unsupported behavior-cloning checkpoint prefix: {prefix!r}")
+    if override := os.environ.get(env_name):
+        path = Path(override)
+        if not path.is_file():
+            raise FileNotFoundError(f"{env_name} checkpoint not found: {path}")
+        print(f"[distill] {prefix or 'expert_'}checkpoint {path} ({env_name})")
+        return path
     if bc_cfg.get(f"{prefix}checkpoint_path"):
         return Path(bc_cfg[f"{prefix}checkpoint_path"])
     run = bc_cfg.get(f"{prefix}wandb_run_path")
@@ -162,32 +254,78 @@ def _resolve_checkpoint(bc_cfg: dict, prefix: str = "") -> Path | None:
         return None
     from mjlab.utils.os import get_wandb_checkpoint_path
 
-    path, cached = get_wandb_checkpoint_path(EXPERT_CACHE_DIR, Path(run), bc_cfg.get(f"{prefix}checkpoint_name"))
-    print(f"[distill] {prefix or 'expert_'}checkpoint {path} ({'cached' if cached else 'downloaded'})")
+    path, cached = get_wandb_checkpoint_path(
+        EXPERT_CACHE_DIR,
+        Path(run),
+        bc_cfg.get(f"{prefix}checkpoint_name"),
+    )
+    source = "cached" if cached else "downloaded"
+    print(f"[distill] {prefix or 'expert_'}checkpoint {path} ({source})")
     return path
 
 
 class PpoWithExpertBc(PPO):
-    def __init__(self, actor, critic, storage, *args, bc_cfg: dict | None = None, **kwargs) -> None:
+    def __init__(
+        self, actor, critic, storage, *args, bc_cfg: dict | None = None, **kwargs
+    ) -> None:
         super().__init__(actor, critic, storage, *args, **kwargs)
         self.bc_cfg = bc_cfg
         self.expert = None
         self.anchor = None
+        self._bc_update_count = 0
         if bc_cfg:
-            ckpt = torch.load(_resolve_checkpoint(bc_cfg), map_location=self.device, weights_only=False)
-            self.expert = load_expert_from(self.actor, ckpt["actor_state_dict"]).to(self.device)
-            anchor_path = _resolve_checkpoint(bc_cfg, "anchor_") if bc_cfg.get("anchor_coef", 0.0) > 0 else None
+            ckpt = None
+            if bc_cfg.get("coef", 0.0) > 0:
+                ckpt = torch.load(
+                    _resolve_checkpoint(bc_cfg),
+                    map_location=self.device,
+                    weights_only=False,
+                )
+                self.expert = load_expert_from(self.actor, ckpt["actor_state_dict"]).to(
+                    self.device
+                )
+            anchor_path = (
+                _resolve_checkpoint(bc_cfg, "anchor_")
+                if bc_cfg.get("anchor_coef", 0.0) > 0
+                else None
+            )
             if anchor_path is not None:
-                ack = torch.load(anchor_path, map_location=self.device, weights_only=False)
-                self.anchor = load_expert_from(self.actor, ack["actor_state_dict"]).to(self.device)
+                ack = torch.load(
+                    anchor_path, map_location=self.device, weights_only=False
+                )
+                self.anchor = load_expert_from(self.actor, ack["actor_state_dict"]).to(
+                    self.device
+                )
+            if self.expert is None and self.anchor is None:
+                raise ValueError("behavior cloning is enabled but no teacher is active")
             # Own optimizer: PPO's adaptive-KL schedule and shared Adam moments
             # would otherwise throttle/mix the BC step (first path check: 4 BC
             # steps through the PPO optimizer lost to 20 PPO steps per iteration).
-            self.bc_optimizer = torch.optim.Adam(self.actor.parameters(), lr=bc_cfg["learning_rate"])
+            self.bc_optimizer = torch.optim.Adam(
+                self.actor.parameters(), lr=bc_cfg["learning_rate"]
+            )
+            if ckpt is None:
+                expert_summary = "OFF"
+            else:
+                expert_summary = (
+                    f"ON (iter {ckpt.get('iter')}) on "
+                    f"tilt>{bc_cfg['gate_tilt_deg']}° coef={bc_cfg['coef']}"
+                )
+            if self.anchor is None:
+                anchor_summary = "OFF"
+            elif bc_cfg.get("anchor_all"):
+                anchor_summary = f"ON on all frames coef={bc_cfg['anchor_coef']}"
+            else:
+                anchor_summary = (
+                    f"ON on tilt<{bc_cfg['anchor_tilt_deg']}° "
+                    f"coef={bc_cfg['anchor_coef']}"
+                )
             print(
-                f"[distill] expert BC ON: stand expert (iter {ckpt.get('iter')}) on tilt>{bc_cfg['gate_tilt_deg']}° coef={bc_cfg['coef']}; "
-                f"walk anchor {'ON on tilt<' + str(bc_cfg['anchor_tilt_deg']) + '° coef=' + str(bc_cfg['anchor_coef']) if self.anchor is not None else 'OFF'}; "
-                f"lr={bc_cfg['learning_rate']} epochs={bc_cfg['epochs']} mini_batches={bc_cfg['mini_batches']} min_mb={bc_cfg.get('min_mini_batch', 1)}"
+                "[distill] behavior cloning ON: "
+                f"stand expert {expert_summary}; actor anchor {anchor_summary}; "
+                f"lr={bc_cfg['learning_rate']} epochs={bc_cfg['epochs']} "
+                f"mini_batches={bc_cfg['mini_batches']} "
+                f"min_mb={bc_cfg.get('min_mini_batch', 1)}"
             )
 
     # ── BC pass ───────────────────────────────────────────────────────────────
@@ -197,25 +335,23 @@ class PpoWithExpertBc(PPO):
         obs_td: TensorDict = self.storage.observations.flatten(0, 1)  # (T*N, ...)
         groups = list(self.actor.obs_groups)
         flat = torch.cat([obs_td[g] for g in groups], dim=-1)
-        gsl = tuple(cfg["gravity_slice"])
-        fallen = fallen_mask_from_obs(flat, gsl, cfg["gate_tilt_deg"])
-        upright = ~fallen_mask_from_obs(flat, gsl, cfg["anchor_tilt_deg"]) if self.anchor is not None else torch.zeros_like(fallen)
-        body_teach = torch.zeros_like(fallen)
-        if cfg.get("body_slice") is not None:
-            body_frames, body_teach = body_frame_masks(flat, tuple(cfg["twist_slice"]), tuple(cfg["body_slice"]),
-                                                       tuple(cfg["body_active_axes"]), tuple(cfg["body_no_teacher_axes"]))
-            upright = upright & ~body_frames
-            body_teach = body_teach & ~fallen
-        turn_free = torch.zeros_like(fallen)
-        if cfg.get("unanchor_turn_in_place"):
-            turn_free = turn_in_place_mask(flat, tuple(cfg["twist_slice"]))
-            upright = upright & ~turn_free
-        stats = {"expert_bc_fallen_frac": fallen.float().mean().item(), "expert_bc_anchor_frac": upright.float().mean().item(),
-                 "expert_bc_body_teach_frac": body_teach.float().mean().item(),
-                 "expert_bc_turn_free_frac": turn_free.float().mean().item()}
+        fallen, upright, body_teach, turn_free = teacher_masks_from_obs(
+            flat,
+            cfg,
+            has_expert=self.expert is not None,
+            has_anchor=self.anchor is not None,
+        )
+        stats = {
+            "expert_bc_fallen_frac": fallen.float().mean().item(),
+            "expert_bc_anchor_frac": upright.float().mean().item(),
+            "expert_bc_body_teach_frac": body_teach.float().mean().item(),
+            "expert_bc_turn_free_frac": turn_free.float().mean().item(),
+        }
         fallen = fallen | body_teach
         if fallen.sum().item() < cfg["min_samples"]:
-            fallen = torch.zeros_like(fallen)  # too few fallen frames: anchor-only pass (or nothing)
+            fallen = torch.zeros_like(
+                fallen
+            )  # too few fallen frames: anchor-only pass (or nothing)
         use = fallen | upright
         idx = use.nonzero().flatten()
         if idx.numel() == 0:
@@ -223,17 +359,25 @@ class PpoWithExpertBc(PPO):
             return stats
         obs_td = obs_td[idx]
         fallen = fallen[idx]
-        weight = torch.where(fallen, torch.full_like(fallen, cfg["coef"], dtype=torch.float),
-                             torch.full_like(fallen, cfg.get("anchor_coef", 0.0), dtype=torch.float))
+        weight = torch.where(
+            fallen,
+            torch.full_like(fallen, cfg["coef"], dtype=torch.float),
+            torch.full_like(fallen, cfg.get("anchor_coef", 0.0), dtype=torch.float),
+        )
         with torch.no_grad():
-            target = torch.zeros(idx.numel(), self.storage.actions.shape[-1], device=self.device)
+            target = torch.zeros(
+                idx.numel(), self.storage.actions.shape[-1], device=self.device
+            )
             if fallen.any():
                 exp_td = obs_td[fallen].clone()
-                exp_flat = expert_input(torch.cat([exp_td[g] for g in groups], dim=-1), tuple(cfg["twist_slice"]))
+                exp_flat = expert_input(
+                    torch.cat([exp_td[g] for g in groups], dim=-1),
+                    tuple(cfg["twist_slice"]),
+                )
                 off = 0
                 for g in groups:  # rebuild the groups from the twist-zeroed flat obs
                     d = exp_td[g].shape[-1]
-                    exp_td[g] = exp_flat[:, off:off + d]
+                    exp_td[g] = exp_flat[:, off : off + d]
                     off += d
                 target[fallen] = self.expert(exp_td)
             if (~fallen).any():
@@ -245,12 +389,14 @@ class PpoWithExpertBc(PPO):
         for _ in range(cfg["epochs"]):
             perm = torch.randperm(n, device=self.device)
             for s in range(0, n, mb):
-                sel = perm[s:s + mb]
+                sel = perm[s : s + mb]
                 pred = self.actor(obs_td[sel])
                 loss = (weight[sel] * (pred - target[sel]).pow(2).mean(dim=1)).mean()
                 self.bc_optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
+                torch.nn.utils.clip_grad_norm_(
+                    self.actor.parameters(), self.max_grad_norm
+                )
                 self.bc_optimizer.step()
                 total += loss.item()
                 steps += 1
@@ -259,6 +405,13 @@ class PpoWithExpertBc(PPO):
 
     def update(self) -> dict[str, float]:
         loss_dict = super().update()
-        if self.expert is not None:
+        max_updates = self.bc_cfg.get("max_updates") if self.bc_cfg else None
+        within_update_budget = (
+            max_updates is None or self._bc_update_count < max_updates
+        )
+        if (
+            self.expert is not None or self.anchor is not None
+        ) and within_update_budget:
             loss_dict.update(self._bc_update())
+            self._bc_update_count += 1
         return loss_dict

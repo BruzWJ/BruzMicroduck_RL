@@ -11,9 +11,8 @@ sim2real machinery, and updated for the NEW roller model:
   - Legs run the canonical BAM actuator like every other variant (was a plain
     XML PD — an actuator-physics mismatch, and no joint-friction DR).
   - Obs migrated to the unified 61D layout (twist + zero-padded head/body
-    command slots) so roller policies load through the runtime's
-    --new-cmd-obs path. Symmetry OFF (SYMMETRY_CFG is hardcoded for the old
-    51D layout).
+    command slots), matching the runtime contract. Symmetry OFF (SYMMETRY_CFG
+    is hardcoded for the old 51D layout).
   - DR/noise/delays matched to the velocity env's FIXED (non-accumulating,
     per-env-verified) versions; wheel-bearing frictionloss DR kept
     (dr.dof_frictionloss on the passive wheels + existing curriculum).
@@ -27,6 +26,7 @@ Task design (unchanged — the roller recipe):
 """
 
 import math
+import os
 from copy import deepcopy
 
 # Symmetry — OFF: SYMMETRY_CFG's obs permutation is hardcoded for the old 51D
@@ -48,8 +48,8 @@ ENABLE_ENCODER_BIAS                  = True
 COM_RANDOMIZATION_RANGE          = 0.003   # ±3mm initial, ramped via curriculum
 HEAD_COM_RANDOMIZATION_RANGE     = 0.003
 MASS_INERTIA_RANDOMIZATION_RANGE = (0.95, 1.05)
-JOINT_FRICTION_RANDOMIZATION_RANGE = (0.9, 1.1)
-ARMATURE_RANDOMIZATION_RANGE     = (0.9, 1.1)
+JOINT_FRICTION_RANDOMIZATION_RANGE = (0.7, 1.3)
+ARMATURE_RANDOMIZATION_RANGE     = (0.7, 1.3)
 VELOCITY_PUSH_INTERVAL_S         = (3.0, 6.0)
 VELOCITY_PUSH_RANGE              = (-0.2, 0.2)  # roller-specific: gentler than walk ±0.3
 IMU_ORIENTATION_RANDOMIZATION_ANGLE = 6.0
@@ -67,8 +67,8 @@ from mjlab.managers import (
 )
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.rl import (
-    RslRlOnPolicyRunnerCfg,
     RslRlModelCfg,
+    RslRlOnPolicyRunnerCfg,
 )
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.tasks.velocity import mdp
@@ -78,8 +78,9 @@ from mjlab.utils.noise import UniformNoiseCfg as Unoise
 
 from mjlab_microduck.robot.microduck_constants import MICRODUCK_WALK_ROLLERS_ROBOT_CFG
 from mjlab_microduck.tasks import mdp as microduck_mdp
+from mjlab_microduck.tasks.distill import PpoWithExpertBcCfg, default_bc_cfg
 from mjlab_microduck.tasks.microduck_velocity_env_cfg import HEAD_BODY_NAMES
-from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg, SYMMETRY_CFG
+from mjlab_microduck.tasks.symmetry import SYMMETRY_CFG, PpoWithSymmetryCfg
 
 
 def make_microduck_velocity_rollers_env_cfg(
@@ -629,6 +630,46 @@ def make_microduck_velocity_rollers_env_cfg(
     return cfg
 
 
+def _roller_algorithm_cfg() -> PpoWithSymmetryCfg:
+    common = {
+        "value_loss_coef": 1.0,
+        "use_clipped_value_loss": True,
+        "clip_param": 0.2,
+        "entropy_coef": 0.03,
+        "num_learning_epochs": 5,
+        "num_mini_batches": 4,
+        "learning_rate": 1.0e-3,
+        "schedule": "adaptive",
+        "gamma": 0.99,
+        "lam": 0.95,
+        "desired_kl": 0.01,
+        "max_grad_norm": 1.0,
+        "symmetry_cfg": SYMMETRY_CFG if ENABLE_SYMMETRY else None,
+    }
+    if not os.environ.get("MICRODUCK_BC_ANCHOR_CHECKPOINT"):
+        return PpoWithSymmetryCfg(**common)
+
+    # The clean official-actor seed intentionally has a fresh critic and PPO
+    # state.  Without a fixed actor anchor, early critic errors drove the roller
+    # policy into a stationary survival optimum before the critic converged.
+    return PpoWithExpertBcCfg(
+        **common,
+        bc_cfg={
+            **default_bc_cfg(),
+            "coef": 0.0,
+            "wandb_run_path": None,
+            "checkpoint_name": None,
+            "checkpoint_path": None,
+            "anchor_all": True,
+            "anchor_coef": 1.0,
+            "learning_rate": 1.0e-4,
+            "epochs": 1,
+            "mini_batches": 4,
+            "max_updates": 100,
+        },
+    )
+
+
 MicroduckRollersRlCfg = RslRlOnPolicyRunnerCfg(
     actor=RslRlModelCfg(
         hidden_dims=(512, 256, 128),
@@ -645,21 +686,7 @@ MicroduckRollersRlCfg = RslRlOnPolicyRunnerCfg(
         activation="elu",
         obs_normalization=True,
     ),
-    algorithm=PpoWithSymmetryCfg(
-        value_loss_coef=1.0,
-        use_clipped_value_loss=True,
-        clip_param=0.2,
-        entropy_coef=0.03,  # roller-specific: higher exploration than the walk envs
-        num_learning_epochs=5,
-        num_mini_batches=4,
-        learning_rate=1.0e-3,
-        schedule="adaptive",
-        gamma=0.99,
-        lam=0.95,
-        desired_kl=0.01,
-        max_grad_norm=1.0,
-        symmetry_cfg=SYMMETRY_CFG if ENABLE_SYMMETRY else None,
-    ),
+    algorithm=_roller_algorithm_cfg(),
     wandb_project="mjlab_microduck",
     experiment_name="velocity_rollers",
     run_name="velocity_rollers",

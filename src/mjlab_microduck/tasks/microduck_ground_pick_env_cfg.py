@@ -56,8 +56,8 @@ HEAD_COM_RANDOMIZATION_RANGE     = 0.003  # ±3mm initial, ramped via curriculum
 MASS_INERTIA_RANDOMIZATION_RANGE = (0.95, 1.05)
 KP_RANDOMIZATION_RANGE           = (0.85, 1.15)
 KD_RANDOMIZATION_RANGE           = (0.9, 1.1)
-JOINT_FRICTION_RANDOMIZATION_RANGE = (0.9, 1.1)
-ARMATURE_RANDOMIZATION_RANGE     = (0.9, 1.1)
+JOINT_FRICTION_RANDOMIZATION_RANGE = (0.7, 1.3)
+ARMATURE_RANDOMIZATION_RANGE     = (0.7, 1.3)
 VELOCITY_PUSH_INTERVAL_S         = (3.0, 6.0)
 VELOCITY_PUSH_RANGE              = (-0.15, 0.15)  # geste quasi-statique -> pushes doux (±0.3 le faisait tomber même droit)
 IMU_ORIENTATION_RANDOMIZATION_ANGLE = 6.0       # match velocity (was 1.0)
@@ -102,9 +102,10 @@ from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg, SYMMETRY_CFG
 #   palier bas [DESCENT_END, HOLD_END) 0.2 s  effleure (court)
 #   remontée   [HOLD_END, RISE_END)    1.5 s  transition bas->STAND
 #   repos      [RISE_END, 1)           0.8 s  debout
-# ⚠️ RISE_END=0.80 > coupure φ=0.7 du script infer_policy : la remontée n'est
-# complète que si le slot joue jusqu'à φ~1.0 (toute la période). Vérifier la
-# fenêtre réelle du runtime.  ⚠️ --ground-pick-period au déploiement = 4.0.
+# Deployment contract: the Bruz bundle and infer_policy run to phase 1.0.
+# RISE_END=0.80 finishes the commanded rise first, leaving 0.8 s to settle
+# upright before handoff. The legacy official bundle ends at phase 0.70 and is
+# not the timing contract for checkpoints trained from this configuration.
 GP_PERIOD    = 4.0
 DESCENT_END  = 0.375
 HOLD_END     = 0.425
@@ -459,9 +460,9 @@ def make_microduck_ground_pick_env_cfg(play: bool = False, rough: bool = False) 
     command: UniformVelocityCommandCfg = cfg.commands["twist"]
     command.rel_standing_envs = 0.0
     command.rel_heading_envs  = 0.0
-    # Période = GP_PERIOD (6 s). Le profil segmenté (constantes en tête de fichier)
-    # découple descente/palier/remontée/repos : descente & remontée ~1.5 s
-    # (lentes -> pas de déséquilibre), palier bas ~0.6 s (court), repos ~2.4 s.
+    # Période = GP_PERIOD (4 s). Le profil segmenté (constantes en tête de fichier)
+    # découple descente/palier/remontée/repos : descente/remontée 1.5 s,
+    # palier bas 0.2 s, puis repos debout 0.8 s.
     cfg.commands["twist"] = microduck_mdp.GroundPickPhaseCommandCfg(
         **{**vars(command), "class_type": microduck_mdp.GroundPickPhaseCommand, "period": GP_PERIOD}
     )

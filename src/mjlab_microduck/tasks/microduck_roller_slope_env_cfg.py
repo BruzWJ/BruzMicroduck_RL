@@ -4,7 +4,7 @@ Le robot spawne sur du plat (impulsion vers l'avant), roule sur une rampe
 descendante et se laisse glisser en restant debout. Aucun pilotage : la
 commande twist est neutralisée (rel_standing_envs=1.0). Terrain custom
 plat+rampe (FlatRampTerrainCfg), curriculum de raideur (terrain_levels_slope).
-Obs 61D unifié → interchangeable au runtime (--new-cmd-obs) — hérité tel quel
+Obs 61D unifié → interchangeable avec le runtime — hérité tel quel
 de make_microduck_velocity_rollers_env_cfg (DR/obs/reset non touchés ici).
 """
 

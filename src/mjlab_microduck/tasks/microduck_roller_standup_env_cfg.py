@@ -6,7 +6,7 @@ Portage de la recette `standup` (canard marcheur) vers le modèle rollers.
 
 Dérive de l'env roller (`make_microduck_velocity_rollers_env_cfg`) → hérite tel
 quel le robot rollers, les capteurs, toute la DR et l'observation 61D, donc
-interchangeable au runtime (--new-cmd-obs). C'est le pattern de roller_slope.
+interchangeable avec le runtime. C'est le pattern de roller_slope.
 
 Deux différences structurelles avec `standup` :
   - les roues passives sont INTERCALÉES dans l'ordre des joints → indices

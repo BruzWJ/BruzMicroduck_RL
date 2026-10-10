@@ -17,8 +17,8 @@ Everything above `duck_control::io::RobotIo` is the code that runs on a real rob
 the ONNX policies, safety, fall detection, odometry, kinematics, every IPC call. This process is the
 only part that knows there is no robot.
 
-**Why this repo.** It already owns the scenes, the BAM actuator models fitted to the real XL330s and
-mjlab; serving a body to a daemon is the mirror of the sim2real it does today. The daemon-side half
+**Why this repo.** It already owns the scenes, the XC330 actuator profile, and the mjlab integration;
+serving a body to a daemon is the mirror of the sim2real it does today. The daemon-side half
 lives in `microduck` because it implements an in-repo trait against an in-repo protocol.
 
 ## The protocol
@@ -100,7 +100,7 @@ SPACING = 0.5
 
 # What the robot reports and nothing here simulates. Constants rather than omissions, so
 # `robotctl health` shows a plausible robot instead of an alarming one.
-NOMINAL_VOLTS = 7.4
+NOMINAL_VOLTS = 7.0
 NOMINAL_TEMP_C = 32.0
 
 

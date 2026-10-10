@@ -41,7 +41,7 @@ DT, DECIM = 0.005, 4
 CTRL_DT = DT * DECIM
 
 
-def build(scene, kp_fw=200.0, vin=7.4):
+def build(scene, kp_fw=200.0, vin=7.0):
     from bam.mujoco import MujocoController
     bam = load_bam_model(kp_fw, vin, BAM_MAX_CURRENT)
     kt, R = bam.kt.value, bam.R.value
@@ -63,7 +63,7 @@ def build(scene, kp_fw=200.0, vin=7.4):
     model = spec.compile(); model.opt.timestep = DT
     model.vis.global_.offwidth, model.vis.global_.offheight = 1280, 960
     data = mujoco.MjData(model)
-    ctrl = MujocoController(bam, names, model, data, vin_drop_gain=0.1, vin_min=6.0)
+    ctrl = MujocoController(bam, names, model, data, vin_drop_gain=0.1, vin_min=6.5)
     return model, data, ctrl, names, kt
 
 

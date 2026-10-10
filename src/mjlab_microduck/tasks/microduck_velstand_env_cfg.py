@@ -12,9 +12,10 @@ reward + command-relative upright + relaxed leg-pose stds. Roll/pitch ≈ ±8-10
 ±10° on the robot; z (crouch) is NOT learned. ENABLE_YAW_FIX is a documented
 failed experiment (OFF) — see its comment.
 
-PROTECTIVE-FALL REBUILD (2026-09, branch protective_fall). Motivation: the real
-robots keep breaking XL330 gearboxes. The daemon's fall-detect limp (kp→50)
-helped but is imperfect, and the limp→standup hand-off produces "convulsions".
+PROTECTIVE-FALL REBUILD (2026-09, branch protective_fall). Motivation: impacts
+and stalls can damage the real robot's servo geartrains. The daemon's
+fall-detect limp (kp→50) helped but is imperfect, and the limp→standup hand-off
+produces "convulsions".
 Goal: ONE policy that walks, falls in a way that protects the servos, and gets
 up gently — so the daemon limp can eventually be switched off.
 
@@ -42,7 +43,7 @@ What changed vs the 2026-07 design (kept below, still valid):
     commands through it are a 40σ input.
   - ROBOT = robot_allcollisions.xml (true full-collision export; identical
     bodies/masses/ranges to groundcontact, 70 collision geoms vs 11), with the
-    15 XL330 housing geoms NAMED (name_servo_collision_geoms) so a contact
+    15 servo housing geoms NAMED (name_servo_collision_geoms) so a contact
     sensor can tell "a servo hit the floor" from "the shell hit the floor".
   - SERVO-PROTECTION COSTS, all mjlab-style (>= 0, negative weight), all ≈ 0
     during clean walking so they price only falls and bad recoveries:
@@ -382,7 +383,7 @@ SERVO_IMPACT_THRESH_N = 2.0
 HEAD_IMPACT_THRESH_N = 15.0
 TRUNK_IMPACT_THRESH_N = 20.0
 SERVO_ACC_THRESH = 300.0
-SERVO_STALL_TORQUE = 0.4
+SERVO_STALL_TORQUE = 0.4        # 77–85% of XC profile stall torque across 6.5–7.2 V
 SERVO_STALL_VEL = 0.5
 
 # Topple pushes: velocity kicks big enough to knock the robot over, so falling

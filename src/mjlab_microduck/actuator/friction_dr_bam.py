@@ -28,6 +28,14 @@ from mjlab.actuator.actuator import ActuatorCmd
 class FrictionDRBamActuator(BamActuator):
     """BamActuator + per-env friction_scale on the BAM friction budget."""
 
+    def __init__(self, cfg, entity, target_ids, target_names) -> None:
+        super().__init__(cfg, entity, target_ids, target_names)
+        # BAM's custom JSON selects a controller implementation as well as its
+        # fitted parameters.  XC330-T181 and XL330 share the same X-series
+        # 4096-count/PWM position-control law, so the XC profile reuses that
+        # implementation but must not inherit the XL330's 1.75 A limiter.
+        self._bam_model.actuator.max_current = cfg.max_current
+
     def initialize(self, mj_model, model, data, device) -> None:
         super().initialize(mj_model, model, data, device)
         # kp_scale is (num_envs, 1); mirror it for a per-env friction multiplier.
@@ -56,6 +64,10 @@ class FrictionDRBamActuator(BamActuator):
 @dataclass(kw_only=True)
 class FrictionDRBamActuatorCfg(BamActuatorCfg):
     """Drop-in for BamActuatorCfg that builds a friction-DR-capable actuator."""
+
+    # Explicit effective limiter for the selected hardware profile. ``None``
+    # means PWM/voltage-limited position control, as used by Bruz's XC330s.
+    max_current: float | None = None
 
     def build(self, entity, target_ids, target_names) -> FrictionDRBamActuator:
         return FrictionDRBamActuator(self, entity, target_ids, target_names)

@@ -726,11 +726,11 @@ def recovery_success(
 
 
 # ── VelStand / protective fall: servo-protection costs ────────────────────────
-# What breaks an XL330 (plastic gear train, ~288:1): (1) a limb back-driven
-# fast by an impact — even torque-off, the rotor inertia reflected through
-# 288² makes the gears see the spike, so joint ACCELERATION at contact is the
+# What damages the XC330-T181 drivetrain: (1) a limb back-driven fast by an
+# impact — even torque-off, rotor inertia reflected through the 180.62:1 gear
+# train makes the gears see the spike, so joint ACCELERATION at contact is the
 # damage proxy; (2) stall — a limb pinned under the body while the servo pushes
-# at max torque strips teeth / overheats; (3) the housing itself striking the
+# at max torque can strip teeth / overheat; (3) the housing itself striking the
 # floor. All three costs below return >= 0 (mjlab-style) → NEGATIVE weight, and
 # are ~0 during clean walking, so they price only falls and bad recoveries.
 
@@ -744,11 +744,13 @@ def servo_stall_penalty(
     """Number of servos pushing hard against something that does not move.
 
     A servo is "stalled" when |actuator torque| > ``torque_thresh`` (N·m) AND
-    |joint velocity| < ``vel_thresh`` (rad/s). BAM's voltage-bounded torque
-    saturates at vin·kt/R ≈ 0.85–1.07 N·m over the trained vin range; a
-    quasi-static stand loads the knees at a few 1e-2 N·m, so 0.4 fires only
-    when the servo is genuinely fighting a pin/jam. Returns the per-step count
-    (>= 0) — weight it negatively.
+    |joint velocity| < ``vel_thresh`` (rad/s). The XC330 profile's
+    voltage-bounded torque saturates at vin·kt/R ≈ 0.469–0.520 N·m over the
+    trained 6.5–7.2 V range. A 0.4 N·m threshold is therefore deliberately
+    near stall (77–85% of that range), while a quasi-static stand loads the
+    knees at only a few 1e-2 N·m. It fires when a servo is genuinely fighting
+    a pin/jam, not during normal support. Returns the per-step count (>= 0) —
+    weight it negatively.
     """
     asset: Entity = env.scene[asset_cfg.name]
     torque = torch.nan_to_num(asset.data.actuator_force, nan=0.0)

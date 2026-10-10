@@ -73,9 +73,9 @@ HEAD_BODY_NAMES = (
 MASS_INERTIA_RANDOMIZATION_RANGE = (0.95, 1.05)  # ±5% applied to BOTH mass and inertia together.
 KP_RANDOMIZATION_RANGE = (0.85, 1.15)  # ±15%
 KD_RANDOMIZATION_RANGE = (0.9, 1.1)  # ±10% (can increase to 0.8-1.2)
-JOINT_FRICTION_RANDOMIZATION_RANGE = (0.9, 1.1)
+JOINT_FRICTION_RANDOMIZATION_RANGE = (0.7, 1.3)
 JOINT_DAMPING_RANDOMIZATION_RANGE = (0.9, 1.1)
-ARMATURE_RANDOMIZATION_RANGE = (0.9, 1.1)  # ±10% reflected rotor inertia (microban: dr.joint_armature, same range)
+ARMATURE_RANDOMIZATION_RANGE = (0.7, 1.3)  # XC value is gear-ratio-derived pending a testbench fit.
 VELOCITY_PUSH_INTERVAL_S = (3.0, 6.0)  # Apply pushes every 3-6 seconds
 VELOCITY_PUSH_RANGE = (-0.3, 0.3)  # Velocity change range in m/s. Was ±0.5 — an
 # ADDITIVE kick larger than max walk speed (0.4) every 3-6 s trains a permanently

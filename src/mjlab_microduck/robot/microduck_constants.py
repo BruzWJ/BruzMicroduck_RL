@@ -2,16 +2,19 @@ import os
 from pathlib import Path
 
 import mujoco
-from mjlab.actuator import XmlActuatorCfg
+from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
+from mjlab.utils.spec_config import CollisionCfg
+
 from mjlab_microduck.actuator import (
     BacklashEncoderBamActuatorCfg,
     FrictionDRBamActuatorCfg,
 )
-from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
-from mjlab.utils.spec_config import CollisionCfg
 
 
 _ROBOT_DIR: Path = Path(os.path.dirname(__file__)) / "microduck"
+XC330_T181_7V_BAM_JSON: Path = (
+    Path(__file__).parents[1] / "actuator" / "params" / "xc330_t181_7v_m6.json"
+)
 
 MICRODUCK_WALK_XML: Path = _ROBOT_DIR / "robot_walk.xml"
 # Ground-contact model (formerly "allcollisions"): curated collision set for
@@ -44,6 +47,7 @@ assert MICRODUCK_GROUNDCONTACT_BACKLASH_XML.exists(), f"XML not found: {MICRODUC
 assert MICRODUCK_WALK_BACKLASH_XML.exists(), f"XML not found: {MICRODUCK_WALK_BACKLASH_XML}"
 assert MICRODUCK_GROUNDCONTACT_ROLLERS_BACKLASH_XML.exists(), f"XML not found: {MICRODUCK_GROUNDCONTACT_ROLLERS_BACKLASH_XML}"
 assert MICRODUCK_ALLCOLLISIONS_BACKLASH_XML.exists(), f"XML not found: {MICRODUCK_ALLCOLLISIONS_BACKLASH_XML}"
+assert XC330_T181_7V_BAM_JSON.exists(), f"BAM params not found: {XC330_T181_7V_BAM_JSON}"
 
 
 def get_walk_spec() -> mujoco.MjSpec:
@@ -153,23 +157,29 @@ FULL_COLLISION = CollisionCfg(
     # base_cfg=XmlPositionActuatorCfg(joint_names_expr=(r".*",)),
 # )
 
-# -- BAM M6 actuator (full voltage control + load-dependent friction) --
+# -- XC330-T181 BAM M6 actuator (full voltage control + load-dependent friction) --
 # Exclude passive_* joints (jaw linkage in the new model has no XML actuator).
 # Voltage domain randomization (mirrors mjlab_microban):
 #   - vin_range: per-env battery voltage sampled at startup (replaces fixed vin)
 #   - vin_drop_gain_range: load-dependent voltage sag V_drop = gain * sum(|tau|)
 #   - vin_min: hard floor on the effective voltage after sag
-# kp_fw kept at 200 (microduck's preserved firmware stiffness; microban uses 125).
+# The motor/back-EMF terms are derived from ROBOTIS's 9 V torque/speed data.
+# Until an XC330 testbench fit exists, the gearbox-friction terms use BAM's
+# measured XL330 M6 curve and the reflected inertia is gear-ratio-scaled. The
+# task-level friction/inertia DR covers that identification uncertainty.
+#
+# The JSON names BAM's ``xl330`` actuator because XC330-T181 uses the same
+# X-series 4096-count/PWM position-control law. All physical parameters below
+# are XC-specific, and max_current=None deliberately removes the XL default.
+# kp_fw remains 200 to match robotd's runtime gain.
 _BAM_ACTUATOR_KWARGS = dict(
-    motor_name="xl330",
-    model="m6",
+    json_path=str(XC330_T181_7V_BAM_JSON),
     target_names_expr=(r"^(?!passive_).*",),
-    kp_fw=200.0,  # microduck's preserved firmware stiffness (microban uses 125)
-    # vin_range=(6.9, 7.9),
-    vin_range=(6.5, 8.2),
+    kp_fw=200.0,
+    vin_range=(6.5, 7.2),
     vin_drop_gain_range=(0.0, 0.2),
-    vin_min=6.0,
-    # max_current=1.75,
+    vin_min=6.5,
+    max_current=None,
     delay_min_lag=3,
     delay_max_lag=6,
 )

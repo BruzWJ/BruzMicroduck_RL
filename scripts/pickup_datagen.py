@@ -22,14 +22,17 @@ import time
 import numpy as np
 import onnx
 import torch
+from bam.model import load_model
 from onnx import numpy_helper
 
 import mjlab_microduck.tasks  # noqa: F401  (registers tasks)
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab_microduck.pickup.features import FEAT_DIM, PAUSED_IDX, CurrentSensorDR, paused_target_rel
 from mjlab_microduck.pickup.hand import VirtualHand, HandCfg, add_hand_to_spec
-from mjlab_microduck.robot.microduck_constants import MICRODUCK_ALLCOLLISIONS_BACKLASH_ROBOT_CFG
-from mjlab_microduck.tasks import mdp as m
+from mjlab_microduck.robot.microduck_constants import (
+    MICRODUCK_ALLCOLLISIONS_BACKLASH_ROBOT_CFG,
+    XC330_T181_7V_BAM_JSON,
+)
 from mjlab_microduck.tasks.backlash import make_backlash_variant
 from mjlab_microduck.tasks.microduck_velstand_env_cfg import make_microduck_velstand_env_cfg
 
@@ -143,9 +146,7 @@ def main():
     env = build_env(args.num_envs, dev, args.seed, keep_held_tilted=args.force_pickup_at is not None)
     N, dt = env.num_envs, env.step_dt
     robot = env.scene["robot"]
-    sids = m._servo_joint_ids(env, robot)
-    from bam.model import load_model
-    kt = load_model(motor_name="xl330", model="m6").kt.value
+    kt = load_model(str(XC330_T181_7V_BAM_JSON)).kt.value
     policy = OnnxMLP(args.policy, dev)
     hcfg = HandCfg(pickup_rate_hz=args.pickup_rate)
     for kv in filter(None, args.hand.split(";")):

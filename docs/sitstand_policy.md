@@ -89,8 +89,8 @@ gone at 2250 regardless.
 
 ```bash
 uv run scripts/export.py Mjlab-SitStand-Flat-MicroDuck \
-  --wandb-run-path pollen-robotics/mjlab_microduck/vfhxgrum --checkpoint 2250 --onnx-file sitstand.onnx
-uv run python claude_experiments/sitstand_fallback_eval.py sitstand.onnx [--no-tip]   # before/after battery
+  --wandb-run-path pollen-robotics/mjlab_microduck/vfhxgrum --checkpoint 2250 --onnx-file sit_stand.onnx
+uv run python claude_experiments/sitstand_fallback_eval.py sit_stand.onnx [--no-tip]   # before/after battery
 ```
 
 Always export through `scripts/export.py` (obs normalizer is baked into the ONNX).

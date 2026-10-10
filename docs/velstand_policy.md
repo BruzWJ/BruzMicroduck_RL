@@ -105,10 +105,12 @@ has neither drift. Always run the walk sweep before picking a checkpoint.
 
 ```bash
 uv run scripts/export.py Mjlab-VelStand-Rough-Backlash-MicroDuck \
-  --wandb-run-path pollen-robotics/mjlab_microduck/j4i6yoq2 --checkpoint 1250
-uv run python claude_experiments/velstand_body_probe.py output.onnx --stand-expert
+  --wandb-run-path pollen-robotics/mjlab_microduck/j4i6yoq2 --checkpoint 1250 \
+  --onnx-file walk_stand.onnx
+uv run python claude_experiments/velstand_body_probe.py walk_stand.onnx --stand-expert
 ```
 
-Always export through `scripts/export.py` (obs normalizer is baked into the ONNX). The official
-set on the Hub is updated by hand (replace `velstand.onnx`, edit only its manifest entry, commit,
-`create_tag vN`); `uv run publish` is for single-policy repos.
+Always export through `scripts/export.py` (obs normalizer is baked into the ONNX). Bruz deploys
+this task as `walk_stand.onnx` inside the complete
+[`BWJ2310/bruzmicroduck-xc330-custom-weight-policies`](https://huggingface.co/BWJ2310/bruzmicroduck-xc330-custom-weight-policies)
+bundle; assemble and publish all ten policies together rather than updating one model by hand.

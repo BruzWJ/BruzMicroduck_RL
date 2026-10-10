@@ -1,79 +1,107 @@
 # HF Jobs training
 
-Train mjlab-microduck on Hugging Face's managed GPUs. Auth is the cached HF
-token (`hf auth login` or `HF_TOKEN`); everything goes through the
-`huggingface_hub` Python API — the standalone `hf` CLI is not required.
+Train mjlab-microduck on Hugging Face managed GPUs. Authentication uses the
+cached Hub token (`hf auth login`) or `HF_TOKEN`; the submitter calls the
+`huggingface_hub` Python API directly.
 
 ## One-time setup
 
-```fish
-hf auth login    # or export HF_TOKEN (any tool that caches the token works)
-wandb login      # auto-detected from ~/.netrc and forwarded
+```bash
+hf auth login
+
+# Optional: only needed when keeping the task's default W&B logger.
+wandb login
 ```
+
+W&B is optional. Without it, pass both `--no-wandb` (do not forward a secret)
+and `--agent.logger tensorboard` (do not start a W&B-backed training run).
 
 ## Submit a run
 
-Your normal train command, plus `--hf-jobs`:
+Add `--hf-jobs` to an otherwise normal training command:
 
-```fish
-uv run train Mjlab-Kick-Flat-MicroDuck \
-    --env.scene.num-envs 4096 --agent.max_iterations 4000 --hf-jobs
+```bash
+uv run train Mjlab-Velocity-Flat-MicroDuck \
+  --env.scene.num-envs 4096 \
+  --agent.max_iterations 4000 \
+  --hf-jobs
 ```
 
-You'll be asked which namespace to run under — your personal account or one
-of your orgs. Repos, uv-cache bucket, billing and the job itself all live in
-the chosen namespace. Pass `--namespace <name>` to skip the prompt
-(non-interactive runs default to personal).
+The prompt selects the personal or organization namespace that owns the job,
+private source/checkpoint dataset, and billing. By default, each launch writes
+below a unique `training/runs/<run-name>` path in that dataset, so training
+never creates a model repository. Use `--namespace <name>` to skip the prompt;
+non-interactive runs default to the personal namespace. Without `--hf-jobs`,
+training remains local.
 
-Without `--hf-jobs` the command behaves exactly as before (local training).
-Submission flags are consumed locally; everything else is forwarded to
-`uv run train` inside the job.
+Useful submission flags:
 
-Useful flags:
-- `--namespace <name>` — account/org to run under; skips the prompt
-- `--flavor l4x1` (default) / `a10g-large` / `a100-large`
-- `--timeout 12h` (default) — job is killed past this
-- `--detach` — submit and return immediately (default streams logs; Ctrl-C detaches without killing the job)
-- `--dry-run` — build tarball, print the job spec, do not submit
-- `--run-name <tag>` — overrides the auto-generated `<task>-<timestamp>` name
-- `--no-uv-cache` — disable the persistent `uv` cache bucket (first-run cost on every run)
-- `--no-wandb` — don't forward a wandb key
+- `--namespace <name>` — select the account or organization.
+- `--flavor l4x1` — choose hardware (`l4x1` is the default).
+- `--timeout 12h` — set the job time limit.
+- `--detach` — return after submission instead of streaming logs.
+- `--dry-run` — build the source snapshot and print the job spec only.
+- `--run-name <tag>` — choose the readable checkpoint-path name.
+- `--hf-resume-checkpoint <path>` — resume from a checkpoint in the mounted
+  private source dataset.
+- `--hf-bc-expert-checkpoint <path>` / `--hf-bc-anchor-checkpoint <path>` —
+  use licensed behavior-cloning teachers from that same dataset instead of
+  resolving the task defaults through W&B.
+- `--no-wandb` — do not require or forward a W&B API key; also select a
+  non-W&B logger in the training arguments.
+- `--uv-cache` — opt in to a persistent `uv` cache bucket. It is off by
+  default because the bucket's FUSE/copy path can be slower than downloading
+  wheels on each job. `--uv-cache-bucket` overrides its location.
 
-(`uv run scripts/hf/train_hf.py <task> ...` still works — it's a shim to the
-same code, which lives in `src/mjlab_microduck/hf_jobs.py`.)
+## Fine-tune an existing checkpoint
 
-## What happens under the hood
+Put each `.pt` seed in the source dataset, then pass its path relative to the
+dataset's `/src` mount:
 
-1. `git ls-files` snapshots tracked + uncommitted files of the repo you run
-   from (worktree-aware) → `src-<stamp>.tar.gz`.
-2. Tarball is uploaded to private dataset `<namespace>/mjlab-microduck-src`.
-3. Private model repo `<namespace>/<run-name>` is created for checkpoints.
-4. A private HF bucket `<namespace>/mjlab-uv-cache` is mounted at `/uv-cache`
-   and used as `UV_CACHE_DIR` so wheel downloads persist across runs (first
-   run cold, subsequent runs fast).
-5. `HfApi.run_job` launches a container that:
-   - installs `uv`, extracts the tarball, runs `uv sync` (warm-cached),
-   - starts `scripts/hf/uploader.py` in background (watches `logs/rsl_rl/**/model_*.pt`, pushes every 60s),
-   - runs `uv run train <task> <args>`,
-   - does a final one-shot upload on exit.
-6. wandb credentials are forwarded as a secret — runs show up live in your
-   wandb project.
+```bash
+hf upload BWJ2310/mjlab-microduck-src ./walk.pt checkpoints/walk.pt \
+  --type dataset
 
-## Browsing checkpoints
-
-The submitter prints `https://huggingface.co/<namespace>/<run-name>` at
-start; new `.pt` files appear there during training.
-
-## Managing jobs
-
-The job id and URL are printed at submission. From Python:
-
-```python
-from huggingface_hub import HfApi
-api = HfApi()
-api.list_jobs()                                  # or namespace="pollen-robotics"
-for l in api.fetch_job_logs(job_id="...", follow=True): print(l)
-api.cancel_job(job_id="...")
+uv run train Mjlab-Velocity-Flat-MicroDuck \
+  --env.scene.num-envs 4096 \
+  --agent.max_iterations 1500 \
+  --agent.logger tensorboard \
+  --hf-resume-checkpoint checkpoints/walk.pt \
+  --namespace BWJ2310 \
+  --run-name xc330-walk \
+  --no-wandb --detach --hf-jobs
 ```
 
-(or the `hf jobs ps/logs/cancel` CLI if you have it installed.)
+`--hf-resume-checkpoint` copies `/src/<path>` to the registered task's local
+log tree and injects the matching `--agent.resume`, `--agent.load-run`, and
+`--agent.load-checkpoint` options. Do not also pass those options or a W&B
+checkpoint source. This restores the complete RSL-RL state: actor, critic, PPO
+optimizer, normalizer, iteration, and curriculum counters. Task-specific
+auxiliary optimizers are separate state and must document their own resume
+contract. Use one private training-artifacts dataset. Pass
+the previous output checkpoint to `--hf-resume-checkpoint` when continuing;
+every launch writes to a new generated per-run path so it cannot overwrite an
+earlier run. Intermediate checkpoints are training artifacts and never create
+model repositories. The source/checkpoint dataset is created on the first run.
+Only the final, validated ten-policy bundle belongs in the single public model
+repository
+[`BWJ2310/bruzmicroduck-xc330-custom-weight-policies`](https://huggingface.co/BWJ2310/bruzmicroduck-xc330-custom-weight-policies).
+Cross-task transfer is a warm start instead; prefix the command with
+`MICRODUCK_WARM_START=1` only when that is intentional.
+
+## Outputs and job management
+
+The submitter snapshots tracked and nonignored untracked worktree files into
+the private source dataset. The job runs `uv sync`, trains, and uploads new
+`model_*.pt` checkpoints plus dumped configs every 60 seconds and once more on
+exit. It does not auto-export the newest checkpoint: evaluate and select a
+checkpoint first, then export that selection explicitly for the final bundle.
+
+The job ID, job URL, and exact private dataset checkpoint path are printed at
+submission. Manage detached jobs with:
+
+```bash
+hf jobs inspect <job-id> --namespace <name>
+hf jobs logs <job-id> --namespace <name> --follow
+hf jobs cancel <job-id> --namespace <name>
+```

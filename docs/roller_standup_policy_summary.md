@@ -4,7 +4,7 @@
 
 - **Tâche** : `Mjlab-RollerStandUp-Flat-MicroDuck`
 - **Fichier** : `src/mjlab_microduck/tasks/microduck_roller_standup_env_cfg.py`
-- **Base** : dérivée de l'env roller (`velocity_rollers`) → même robot, même physique/DR, **même observation 61D** (interchangeable au runtime, chargeable via `--new-cmd-obs`).
+- **Base** : dérivée de l'env roller (`velocity_rollers`) → même robot, même physique/DR, **même observation 61D** (interchangeable au runtime).
 - **Spec** : `docs/superpowers/specs/2026-08-04-roller-standup-design.md`
 - **Politique aveugle** : pas de scan de terrain ; proprioception + `projected_gravity`.
 

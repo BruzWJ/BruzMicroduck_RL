@@ -1,10 +1,10 @@
 # AGENTS.md
 
-RL training environments for Microduck — a ~920 g, ~25 cm tall bipedal
-robot with 14 Dynamixel XL330 servos — built on [mjlab](https://github.com/mujocolab/mjlab)
+RL training environments for BruzMicroduck — a ~1.0 kg, ~25 cm tall bipedal
+robot with 14 controlled Dynamixel XC330-T181 servos (plus the mouth servo) — built on [mjlab](https://github.com/mujocolab/mjlab)
 (MuJoCo Warp) with PPO (rsl_rl). Policies are trained here at 50 Hz, exported to
-ONNX, and deployed by the runtime in the `pollen-robotics/microduck` repo on
-the real robot. Sim2real transfer
+ONNX, and deployed by the runtime in the `BruzWJ/BruzMicroduck` repo on the
+real robot. Sim2real transfer
 is the whole point: every convention below exists because breaking it produced a
 policy that worked in the viewer and failed on hardware.
 
@@ -18,7 +18,7 @@ uv run play <TASK_ID> --wandb-run-path <entity/project/run_id>
 uv run scripts/export.py <TASK_ID> --wandb-run-path <...>   # → ONNX (bakes obs normalizer — mandatory path)
 uv run publish --task <TASK_ID> --wandb-run-path <...> --checkpoint N --repo <user>/microduck-<name> --kind episodic --duration-s 4.0
                                                     # → HF Hub repo (policy.onnx + schema-2 manifest.json + README) the daemon loads via `robotctl policy add`
-uv run scripts/infer_policy.py --walking out.onnx   # CPU MuJoCo deployment rehearsal (BAM M6 actuators as in training; --no-bam = XML PD)
+uv run scripts/infer_policy.py --walking out.onnx   # CPU MuJoCo deployment rehearsal (BAM M6 actuators as in training)
 uv run --with pytest pytest tests/
 ```
 
@@ -66,7 +66,8 @@ Never launch a long run without one.
   Every actuator/obs/reward selector uses `^(?!passive_).*` — keep the prefix
   convention when adding joints, and new `passive_` regexes must not
   accidentally match backlash joints (`^passive_.*wheel`, not `^passive_.*`).
-- **Actuators are BAM** (voltage-controlled XL330 model, friction computed by
+- **Actuators are BAM** (the repo-local, voltage-controlled XC330-T181-at-7 V
+  profile; friction is computed by
   the actuator). Two consequences: any STANDALONE env cfg must register the
   `expand_bam_friction_fields` startup event, and joint-friction DR must scale
   the actuator's `friction_scale` — `dof_frictionloss` is zeroed under BAM, so

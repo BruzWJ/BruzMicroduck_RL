@@ -4,10 +4,10 @@
 
 
 RL training environments for [Microduck](https://github.com/pollen-robotics/microduck) —
-a ~920 g, ~25 cm tall bipedal robot — built on
+a ~1.0 kg, ~25 cm tall bipedal robot — built on
 [mjlab](https://github.com/mujocolab/mjlab) (MuJoCo Warp) with PPO.
 Policies are trained here at 50 Hz, exported to ONNX, and deployed on the real
-robot by the runtime in [pollen-robotics/microduck](https://github.com/pollen-robotics/microduck).
+robot by the runtime in [BruzWJ/BruzMicroduck](https://github.com/BruzWJ/BruzMicroduck).
 
 <!-- HERO VIDEO — real robot montage: walking, standup, roulade, roller skating.
      Keep it short (~30 s) and real-robot-first: this is the "why should I care" shot. -->
@@ -70,7 +70,7 @@ instead of locally (see [scripts/hf/README.md](scripts/hf/README.md)).
 | `Mjlab-StandUp-{Flat,Rough}-MicroDuck` | flat/rough | Stand up from face-down/face-up/sitting, then hold the stand + body-pose control |
 | `Mjlab-SitStand-{Flat,Rough}-MicroDuck` | flat/rough | Commanded sit ↔ stand in one policy, gently, head commandable |
 | `Mjlab-GroundPick-{Flat,Rough}-MicroDuck` | flat/rough | Crouch and touch the ground with the mouth tip, return to stand |
-| `Mjlab-BallKick-Flat-MicroDuck` | flat | Kick a 70 mm / 15 g ball forward (actor is ball-blind) |
+| `Mjlab-BallKick{,Left}-Flat-MicroDuck` | flat | Kick a 70 mm / 15 g ball with the right/left foot (actor is ball-blind) |
 | `Mjlab-Roulade-Flat-MicroDuck` | flat | Forward roll over the head, land back on the feet |
 | `Mjlab-Velocity-Flat-MicroDuck-Rollers` | flat | Roller-skate velocity tracking (passive wheels under the feet) |
 | `Mjlab-Velocity-Swizzle-MicroDuck` | flat | Classic symmetric swizzle skating |
@@ -81,19 +81,25 @@ instead of locally (see [scripts/hf/README.md](scripts/hf/README.md)).
 
 At deployment the runtime hot-swaps these policies (walk / recover / trick)
 behind a shared 61-dimensional observation contract, so any of them can take
-over the robot at any moment. `scripts/infer_policy.py` rehearses exactly that:
+over the robot at any moment. `scripts/infer_policy.py` rehearses those command
+encodings and timed handoffs:
 
 ```bash
 uv run scripts/infer_policy.py --walking walk.onnx --standing stand.onnx \
-    --sitstand sitstand.onnx --roulade roulade.onnx --new-cmd-obs
+    --sitstand sit_stand.onnx --roulade forward_roll.onnx
 ```
 
 Keyboard-driven (velocity commands, `G` ground pick, `Y` sit/stand, `R` roulade,
 `K`/`L` kicks); `--debug`, `--save-csv`, `--record` support sim2real comparisons.
-The servos are simulated with the same BAM M6 XL330 model the policies are
-trained against (voltage control + load-dependent friction, via
+Raw ONNX files do not include their set manifest, so the rehearsal defaults
+`--ground-pick-period 4.0` to the current Bruz bundle and always completes the
+full ground-pick cycle, with 0.5 s kicks and the 1.5 s roulade handoff. Match the
+period and `--action-scale` to the manifest/runtime configuration.
+
+The servos are simulated with the same XC330-T181-at-7 V BAM M6 profile the
+policies are trained against (voltage control + load-dependent friction, via
 `bam.mujoco.MujocoController`); `--vin` / `--vin-drop-gain` / `--kp-fw` pin the
-training DR ranges to one value, `--no-bam` falls back to the XML PD actuators.
+training DR ranges to one value.
 
 ### Backlash variants
 
@@ -111,13 +117,21 @@ See `src/mjlab_microduck/tasks/backlash.py`.
 
 ## Actuator model
 
-All tasks use the [BAM](https://github.com/Rhoban/bam) M6 actuator model for
-the Dynamixel XL330 (voltage control law, back-EMF, Coulomb/Stribeck/load-dependent
-friction), with per-env domain randomization on battery voltage, voltage sag
-under load, command delay, and friction magnitude
+All tasks use a repo-local [BAM](https://github.com/Rhoban/bam) M6 profile for
+Bruz's Dynamixel XC330-T181 servos on the measured 7 V bus (voltage control,
+back-EMF, Coulomb/Stribeck/load-dependent friction), with per-env domain
+randomization on bus voltage, voltage sag under load, command delay, and
+friction magnitude
 (`FrictionDRBamActuator` in `src/mjlab_microduck/actuator/`).
 
-At this scale — tiny servos driving a ~920 g biped — actuator fidelity is most
+The effective motor terms reproduce ROBOTIS's published 9 V stall-torque and
+no-load-speed endpoints. The XC330 has not yet been identified on BAM's
+testbench, so its M6 gearbox-friction curve starts from BAM's measured XL330
+curve and its reflected inertia is scaled by the squared gear-ratio change;
+the wider friction/inertia randomization covers that uncertainty during the
+first fine-tuning pass.
+
+At this scale — tiny servos driving a ~1.0 kg biped — actuator fidelity is most
 of the sim2real gap, which is why the actuator is modeled down to its voltage
 control law instead of an ideal PD.
 
@@ -135,11 +149,11 @@ one `config_mjcf_*.json` per model:
 | `robot_allcollisions.xml` | True full-collision model — every part has a collision geom. No task uses it yet |
 | `robot_*_backlash.xml` | Backlash task variants (generated by `add_backlash.py`) |
 
-This fork models the measured `power_support` at 52 g and the battery at
-250 g. Because Onshape merges both fixed parts into the torso inertial,
-`apply_mass_overrides.py` updates the aggregate torso mass, center of mass,
-and full inertia after every export; all export configs run it before any
-backlash joints are added.
+This fork models the measured `power_support` at 52 g, the battery at 250 g,
+and all fifteen 23 g XC330-T181 housings (5 g heavier than the exported XL330
+parts). `apply_mass_overrides.py` updates each affected aggregate mass, center
+of mass, and full inertia after every export; all export configs run it before
+any backlash joints are added.
 
 `scene*.xml` files wrap the robots with a floor + keyframes (STAND/SIT/FOLD)
 for quick viewing and for `infer_policy.py`.
@@ -179,9 +193,11 @@ Conventions worth knowing:
 - Joint layout (14 servos): 0–4 left leg (hip_yaw, hip_roll, hip_pitch, knee,
   ankle), 5–8 neck/head (neck_pitch, head_pitch, head_yaw, head_roll),
   9–13 right leg.
-- The exporter bakes the observation normalizer into the ONNX graph — always
-  deploy ONNX produced by `scripts/export.py`, never a hand-converted
-  checkpoint, or the policy sees unnormalized observations at runtime.
+- The exporter bakes the observation normalizer into the ONNX graph and checks
+  its output against the loaded PyTorch policy before replacing the destination
+  file — always deploy ONNX produced by `scripts/export.py`, never a
+  hand-converted checkpoint, or the policy sees unnormalized observations at
+  runtime.
 
 [AGENTS.md](AGENTS.md) documents the env-building workflow and the reward-design
 rules learned across the project (also aimed at AI coding agents working in
@@ -252,9 +268,51 @@ wandb (task, commit, branch, dirty flag, run, checkpoint), and refuses to
 overwrite an existing `.onnx` in the repo without `--force`. Repos are created
 private; `--no-private` for public, `--tag v1` to tag the revision.
 
-Only constant-command policies are publishable this way. Phase-driven moves
-(the ground pick) and the posture-flag sit↔stand are driven by the daemon
-itself and live in the official set, `pollen-robotics/microduck-policies`.
+The single-policy `publish` command handles constant-command policies. Use the
+complete-set assembler below for daemon-scripted policies such as ground pick
+and sit/stand; it supplies their phase and posture command contracts rather
+than trying to infer them from ONNX.
+
+### Evaluating fine-tune checkpoints
+
+Use the headless evaluator before choosing a checkpoint. It restores the
+checkpoint's saved curriculum stage, freezes that stage for a repeatable
+rollout, checks deterministic 61→14 inference, and records per-term rewards,
+terminations, commands, actions, and physical-state summaries in JSON. Pass
+the scale used by `robotd`: `0.9` for walking and walk/stand; `0.8` for roller
+and roller-crouch; and `1.0` for stand-up, sit/stand, ground-pick, roulade, and
+both kicks. The evaluator changes the simulated joint-target scale while
+retaining the raw actor output in the previous-action observation, matching
+the daemon's ordering.
+
+```bash
+uv run scripts/eval_checkpoint.py Mjlab-Velocity-Flat-MicroDuck \
+    --checkpoint-file /path/to/model_3400.pt \
+    --output eval/walk-3400.json --num-envs 64 --steps 500 --seed 0 \
+    --action-scale 0.9
+```
+
+For a complete replacement of the built-in set, use
+`scripts/assemble_policy_bundle.py` with a JSON source map containing exactly
+the ten canonical filenames. Every entry has `onnx` and `training` objects;
+`training.task_id` must match the filename's registered task and
+`training.onnx_sha256` must match the source file. Other training provenance is
+copied into the manifest, while local checkpoint and evaluation-report paths
+are removed. The assembler validates and smoke-runs every ONNX, writes the
+scripted/phase/roller runtime contracts for XC330-T181, and refuses a partial
+set or an existing destination.
+
+```bash
+uv run scripts/assemble_policy_bundle.py \
+    --sources /path/to/sources.json \
+    --output-dir /path/to/bruzmicroduck-xc330-custom-weight-policies
+```
+
+The complete set publishes as the single model repository
+[`BWJ2310/bruzmicroduck-xc330-custom-weight-policies`](https://huggingface.co/BWJ2310/bruzmicroduck-xc330-custom-weight-policies).
+Add `--publish --tag v1` to upload the assembled files privately, verify their
+hashes from the resulting commit, create the immutable tag, and then make the
+repository public.
 
 ## Tests
 
